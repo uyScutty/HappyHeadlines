@@ -1,0 +1,20 @@
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+
+COPY CommentService/CommentService.csproj CommentService/
+COPY MonitoringService/MonitoringService.csproj MonitoringService/
+
+RUN dotnet restore CommentService/CommentService.csproj
+
+COPY CommentService/ CommentService/
+COPY MonitoringService/ MonitoringService/
+
+RUN dotnet publish CommentService/CommentService.csproj \
+    -c Release -o /app/publish --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
+WORKDIR /app
+
+COPY --from=build /app/publish .
+
+ENTRYPOINT ["dotnet", "CommentService.dll"]

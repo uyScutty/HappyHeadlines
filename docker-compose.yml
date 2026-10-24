@@ -1,0 +1,100 @@
+x-sqlserver-defaults: &sqlserver-defaults
+  image: mcr.microsoft.com/mssql/server:2022-latest
+  environment:
+    ACCEPT_EULA: "Y"
+    MSSQL_PID: Developer
+    MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}"
+
+services:
+  seq:
+    image: datalust/seq:latest
+    ports:
+      - 5341:5341
+      - 5342:80
+    volumes:
+      - rps_seq:/data  
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_ADMINPASSWORD: "${SEQ_ADMIN_PASSWORD:?Set SEQ_ADMIN_PASSWORD in .env}"
+  
+  comment-cache:
+    image: redis:latest
+    container_name: CommentCache
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+  
+  article-cache:
+    image: memcached:latest
+    container_name: ArticleCache
+    ports:
+      - "11211:11211"
+
+  article-cache-worker:
+    build:
+      context: .
+      dockerfile: ArticleCacheWorker/Dockerfile
+    depends_on:
+      - article-cache
+      - global-article-db
+    environment:
+      ConnectionStrings__GlobalArticleDatabase: "Server=global-article-db;Database=GlobalArticleDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env};TrustServerCertificate=True"
+      Cache__Memcached__Host: article-cache
+      Cache__Memcached__Port: "11211"
+    
+      
+  comment-db:
+    <<: *sqlserver-defaults
+    volumes:
+      - mssql-comment:/var/opt/mssql
+
+  global-article-db:
+    <<: *sqlserver-defaults
+    volumes:
+      - mssql-global-article:/var/opt/mssql
+  article-service:
+    build:
+      context: .
+      dockerfile: ArticleService/Dockerfile
+    depends_on: 
+      - global-article-db
+      - article-cache
+    environment:
+      ConnectionStrings__GlobalArticleDatabase: "Server=global-article-db;Database=GlobalArticleDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env};TrustServerCertificate=True"
+      Cache__Memcached__Host: article-cache
+      Cache__Memcached__Port: "11211"
+    scale: 2
+  comment-service:
+    build:
+      context: .
+      dockerfile: CommentService/Dockerfile
+    depends_on: 
+      - comment-cache
+      - comment-db
+    environment:
+      ConnectionStrings__CommentDatabase: "Server=comment-db;Database=CommentDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env};TrustServerCertificate=True"
+      Cache__Redis: comment-cache:6379
+    scale: 1 
+
+  profanity-service:
+    build:
+      context: .
+      dockerfile: ProfanityService/Dockerfile
+    depends_on: 
+      - profanity-db
+    environment:
+      ConnectionStrings__ProfanityDatabase: "Server=profanity-db;Database=ProfanityDb;User Id=sa;Password=${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env};TrustServerCertificate=True"
+    scale: 1   
+
+  profanity-db:
+    <<: *sqlserver-defaults
+    volumes:
+      - mssql-profanity:/var/opt/mssql
+    
+volumes:
+  mssql-global-article: 
+  mssql-comment:
+  mssql-profanity:
+  rps_seq:    
+  redis_data: 

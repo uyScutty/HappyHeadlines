@@ -1,0 +1,182 @@
+
+# ============================================================
+# STAGE 1 – BUILD
+# Her bygger og kompilerer vi vores ArticleService.
+# ============================================================
+
+# FROM vælger det Docker-image, vi bygger videre på.
+# sdk:9.0 indeholder .NET SDK 9 med værktøjer til at:
+# - Hente NuGet-pakker (restore)
+# - Kompilere C#-kode
+# - Bygge og publicere applikationen
+#
+# AS build navngiver denne fase "build".
+# Så kan vi senere hente de færdige filer fra denne fase.
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+
+
+# WORKDIR angiver arbejdsmappen INDE i Docker-buildmiljøet.
+# /src oprettes automatisk, hvis den ikke eksisterer.
+# Efterfølgende kommandoer arbejder som udgangspunkt herfra.
+# Det ændrer IKKE mapperne på vores egen computer.
+
+WORKDIR /src
+
+
+# ============================================================
+# STAGE 1A – KOPIÉR PROJEKTFILER
+# ============================================================
+
+# COPY har formatet:
+# COPY <kilde> <destination>
+#
+# Kilden er relativ til Docker build context
+# (vi bygger fra projektets rodmappe).
+#
+# Destinationen er relativ til WORKDIR (/src).
+#
+# Vi kopierer først kun .csproj-filerne, IKKE C#-koden.
+# Det giver Docker mulighed for at cache restore-laget.
+#
+# ArticleService.csproj beskriver projektets afhængigheder.
+# ArticleShared.csproj beskriver vores fælles bibliotek
+# med blandt andet kontrakter og dataklasser.
+
+COPY ArticleService/ArticleService.csproj ArticleService/
+COPY ArticleShared/ArticleShared.csproj ArticleShared/
+
+
+# ============================================================
+# STAGE 1B – RESTORE AFHÆNGIGHEDER
+# ============================================================
+
+# RUN udfører en kommando under Docker-build.
+#
+# dotnet restore:
+# - Læser ArticleService.csproj
+# - Finder nødvendige NuGet-afhængigheder
+# - Henter pakker, der ikke allerede er tilgængelige
+# - Håndterer ProjectReference til ArticleShared
+#
+# Docker kan genbruge dette build-lag, hvis de relevante
+# filer og tidligere lag ikke er ændret.
+#
+# Det betyder, at ændringer i f.eks. en Controller normalt
+# ikke kræver, at Docker kører restore-laget igen.
+
+RUN dotnet restore ArticleService/ArticleService.csproj
+
+
+# ============================================================
+# STAGE 1C – KOPIÉR SELVE KILDEKODEN
+# ============================================================
+
+# Nu kopierer vi alle relevante filer fra ArticleService.
+# Det inkluderer blandt andet Controllers, Services,
+# Program.cs og øvrige projektfiler.
+#
+# Filerne placeres i /src/ArticleService/.
+
+COPY ArticleService/ ArticleService/
+
+
+# Kopierer hele ArticleShared-biblioteket.
+# Dermed får buildmiljøet adgang til de fælles
+# C#-klasser, kontrakter og øvrige kildefiler.
+#
+# Filerne placeres i /src/ArticleShared/.
+
+COPY ArticleShared/ ArticleShared/
+
+
+# ============================================================
+# STAGE 1D – PUBLISH APPLIKATIONEN
+# ============================================================
+
+# dotnet publish kompilerer projektet og dets refererede
+# projekter, herunder ArticleShared.
+#
+# -c Release:
+#   Forkortelse for --configuration Release.
+#   Bygger en version med Release-optimeringer.
+#
+# -o /app/publish:
+#   Forkortelse for --output.
+#   Gemmer de færdige filer i /app/publish.
+#   Denne mappe ligger INDE i buildmiljøet.
+#
+# --no-restore:
+#   Undlader at køre dotnet restore igen.
+#   Vi har allerede gjort det tidligere.
+#
+# "\" betyder, at kommandoen fortsætter på næste linje.
+#
+# Resultatet indeholder eksempelvis:
+# - ArticleService.dll
+# - ArticleShared.dll
+# - Nødvendige runtime- og konfigurationsfiler
+
+RUN dotnet publish ArticleService/ArticleService.csproj \
+    -c Release -o /app/publish --no-restore
+
+
+# ============================================================
+# STAGE 2 – FINAL / RUNTIME
+# Her opretter vi vores endelige Docker-image.
+# ============================================================
+
+# FROM starter en NY build-fase.
+#
+# aspnet:9.0 indeholder ASP.NET Core Runtime.
+# Det er tilstrækkeligt til at KØRE vores Web API.
+#
+# Vi behøver ikke hele SDK'et i det færdige image.
+# Derfor bliver det mindre og indeholder færre værktøjer.
+#
+# AS final giver denne fase navnet "final".
+
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
+
+
+# Angiver /app som arbejdsmappe i final-fasen.
+# Den er adskilt fra arbejdsmapperne i build-fasen.
+
+WORKDIR /app
+
+
+# ============================================================
+# STAGE 2A – KOPIÉR DE FÆRDIGE FILER
+# ============================================================
+
+# COPY --from=build henter filer fra den tidligere fase,
+# som vi navngav "build".
+#
+# /app/publish:
+#   Kildemappen med de publicerede filer i build-fasen.
+#
+# . :
+#   Destinationen er den nuværende WORKDIR (/app).
+#
+# Vi kopierer altså de færdige programfiler.
+# Vi kopierer IKKE hele SDK'et eller kildekoden.
+#
+# Det er princippet bag et multi-stage Docker build.
+
+COPY --from=build /app/publish .
+
+
+# ============================================================
+# STAGE 2B – START APPLIKATIONEN
+# ============================================================
+
+# ENTRYPOINT angiver standardkommandoen, som Docker
+# udfører, når en container startes fra dette image.
+#
+# "dotnet" starter .NET Runtime.
+# "ArticleService.dll" er vores kompilerede Web API.
+#
+# Når containeren starter, bliver ArticleService startet.
+# API'et skal derefter lytte på den konfigurerede port.
+
+ENTRYPOINT ["dotnet", "ArticleService.dll"]

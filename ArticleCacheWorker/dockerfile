@@ -1,0 +1,20 @@
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+
+COPY ArticleCacheWorker/ArticleCacheWorker.csproj ArticleCacheWorker/
+COPY ArticleShared/ArticleShared.csproj ArticleShared/
+
+RUN dotnet restore ArticleCacheWorker/ArticleCacheWorker.csproj
+
+COPY ArticleCacheWorker/ ArticleCacheWorker/
+COPY ArticleShared/ ArticleShared/
+
+RUN dotnet publish ArticleCacheWorker/ArticleCacheWorker.csproj \
+    -c Release -o /app/publish --no-restore
+
+FROM mcr.microsoft.com/dotnet/runtime:9.0 AS final
+WORKDIR /app
+
+COPY --from=build /app/publish .
+
+ENTRYPOINT ["dotnet", "ArticleCacheWorker.dll"]
